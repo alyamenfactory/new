@@ -5,13 +5,15 @@ import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
 import { rm } from "node:fs/promises";
 
-// Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
+// Some plugins (like esbuild-plugin-pino) use `require` internally, so we polyfill it for ESM build context.
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
+
+  // Clean previous build
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
@@ -21,12 +23,17 @@ async function buildAll() {
     format: "esm",
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
+
+    // Target modern Node.js (adjust if you support older runtimes)
+    target: "node18",
+
     logLevel: "info",
-    // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
-    // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
-    // Examples of unbundleable packages:
-    // - uses native modules and loads them dynamically (e.g. sharp)
-    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
+    sourcemap: "linked",
+
+    // Optional: enable minification for production builds
+    // minify: true,
+
+    // Packages that cannot/should not be bundled (native addons, heavy deps, etc.)
     external: [
       "*.node",
       "sharp",
@@ -101,12 +108,13 @@ async function buildAll() {
       "puppeteer-core",
       "electron",
     ],
-    sourcemap: "linked",
+
     plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
-      esbuildPluginPino({ transports: ["pino-pretty"] })
+      // Handles Pino's worker-thread architecture + pino-pretty transport
+      esbuildPluginPino({ transports: ["pino-pretty"] }),
     ],
-    // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
+
+    // Shim for CJS-only packages (e.g. express) that get bundled into ESM output
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
@@ -115,7 +123,7 @@ import __bannerUrl from 'node:url';
 globalThis.require = __bannerCrReq(import.meta.url);
 globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
-    `,
+`,
     },
   });
 }
